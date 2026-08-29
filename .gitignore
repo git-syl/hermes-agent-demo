@@ -6,3 +6,6 @@
 /.idea/
 /docker/mysql-db/data/
 /docker/pgsql/volumes/
+
+# 博客草稿，不属于源码
+/docs/article-agent-features.md
