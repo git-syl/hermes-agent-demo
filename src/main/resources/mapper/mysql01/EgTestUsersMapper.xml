@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.chat.mapper.mysql01.EgTestUsersMapper">
+
+    <select id="selectSample" resultType="java.util.Map">
+        select *
+        from eg_test_users
+        limit 1
+    </select>
+
+</mapper>

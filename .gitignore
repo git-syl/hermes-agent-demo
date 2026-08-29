@@ -1,0 +1,8 @@
+/Ref/spring-ai/models/spring-ai-transformers/src/main/resources/onnx/all-MiniLM-L6-v2/model.onnx
+*.git.7z
+.git.7z
+/target/
+/log/
+/.idea/
+/docker/mysql-db/data/
+/docker/pgsql/volumes/

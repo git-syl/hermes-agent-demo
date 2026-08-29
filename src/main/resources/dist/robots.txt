@@ -1,0 +1,15 @@
+# robots.txt
+# 部署时请把占位域名 https://example.com 替换为你自己的站点域名
+
+User-agent: *
+
+Allow: /
+
+# 登录 / 授权 / 管理路径不建议被收录
+Disallow: /login
+Disallow: /consent
+Disallow: /authorized
+Disallow: /admin
+Disallow: /admin/*
+
+# Sitemap: https://example.com/sitemap.xml

@@ -1,0 +1,36 @@
+services:
+  # PostgreSQL 数据库（带 pgvector 向量搜索扩展）
+  pgvector-rag-demo:
+    image: pgvector/pgvector:pg16
+    container_name: pgvector-rag-demo
+    restart: always
+    environment:
+      # PostgreSQL 用户名
+      PGUSER: postgres
+      # PostgreSQL 密码（请修改为您的强密码）
+      POSTGRES_PASSWORD: 123456
+      # 数据库名称
+      POSTGRES_DB: rag-demo
+      # 数据存储路径
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: >
+      postgres -c 'max_connections=1000'
+               -c 'shared_buffers=256MB'
+               -c 'work_mem=8MB'
+               -c 'maintenance_work_mem=128MB'
+               -c 'effective_cache_size=2048MB'
+    volumes:
+      # 数据持久化存储（存储在当前目录的 volumes/pgvector/data 文件夹）
+      - ./volumes/pgvector/data:/var/lib/postgresql/data
+      # 初始化脚本目录（容器首次启动时自动执行）
+      - ./pgsql_init:/docker-entrypoint-initdb.d
+    ports:
+      # 格式：主机端口:容器端口。容器内 postgres 固定监听 5432（容器隔离，不会与其他 pg 容器冲突）；
+      # 主机端口换成 5433 避开本机已有的 5432 容器。如需仅本地访问可写成 "127.0.0.1:5433:5432"。
+      - "5433:5432"
+    healthcheck:
+      test: [ 'CMD', 'pg_isready', '-U', 'postgres' ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+

@@ -1,0 +1,46 @@
+# ===== 生产环境配置 =====
+# 仅放置与环境强相关的覆盖项；公共字段保留在 application.yaml。
+# 启用方式：spring.profiles.active=prod （这是默认值）
+
+my-model:
+  base-url: ${MY_MODEL_BASE_URL:http://localhost:8078}
+
+chat:
+  artifacts:
+    # 线上对外可访问的 artifacts 基地址
+    base-url: ${ARTIFACTS_BASE_URL:http://localhost:8080}
+
+
+
+app:
+  # 生产 key；改成 ${BRAVE_API_KEY} 从环境变量读取，避免明文入库。
+  brave-search:
+    api-key: ${BRAVE_API_KEY:sk-*******}
+
+  # SmartWebFetch（抓网页 + AI 摘要）显式开启；其余字段沿用 application.yaml 的默认值。
+  # 摘要走 DeepSeek 默认 key（见 spring.ai.deepseek.api-key），生产建议改成 ${DEEPSEEK_API_KEY}。
+  smart-web-fetch:
+    enabled: true
+
+
+# 生产环境日志：INFO 级别，文件按大小/天滚动并压缩，长期保留 60 天。
+# 关键安全约束：SimpleLoggerAdvisor 显式 OFF——它的 DEBUG 输出会把用户 prompt /
+# 模型完整响应原文落盘，生产严禁开启。
+logging:
+  pattern:
+    dateformat: yyyy-MM-dd HH:mm:ss.SSS,Asia/Shanghai
+  file:
+    name: log/hermes-agent-demo.log
+  level:
+    root: ERROR
+    com.example.chat: ERROR
+    org.springframework.ai: ERROR
+    org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: OFF
+  logback:
+    rollingpolicy:
+      # 当前日志: log/hermes-agent-demo.log
+      # 归档命名: log/hermes-agent-demo.log.2026-05-22.0.gz
+      file-name-pattern: ${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz
+      max-file-size: 50MB
+      max-history: 60
+      total-size-cap: 5GB

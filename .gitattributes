@@ -1,0 +1,6 @@
+# ML model weights: keep OUT of Git LFS (Gitee free tier has no LFS). Store externally.
+*.onnx -text -filter -merge -diff
+*.bin  -text -filter -merge -diff
+*.pt   -text -filter -merge -diff
+*.h5   -text -filter -merge -diff
+*.safetensors -text -filter -merge -diff

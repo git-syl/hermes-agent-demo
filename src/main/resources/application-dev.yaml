@@ -1,0 +1,50 @@
+# ===== 本地开发环境配置 =====
+# 仅放置与环境强相关的覆盖项；公共字段保留在 application.yaml。
+# 启用方式：
+#   -Dspring.profiles.active=dev   或   SPRING_PROFILES_ACTIVE=dev
+
+my-model:
+  base-url: http://localhost:8078
+
+
+chat:
+  artifacts:
+    # 本地服务的对外基地址，端口与 server.port 保持一致
+    base-url: http://localhost:8080
+
+
+app:
+  # 本地开发用 key；建议改成 ${BRAVE_API_KEY} 从环境变量读取，避免明文入库。
+  brave-search:
+    api-key: ${BRAVE_API_KEY:sk-*******}
+    #base-url: https://api.search.brave.com
+    base-url: https://youproxy.search.brave.com
+
+  # SmartWebFetch（抓网页 + AI 摘要）显式开启；其余字段沿用 application.yaml 的默认值。
+  # 摘要走 DeepSeek 默认 key（见 spring.ai.deepseek.api-key）。
+  smart-web-fetch:
+    enabled: true
+
+
+
+
+logging:
+  pattern:
+    dateformat: yyyy-MM-dd HH:mm:ss.SSS,Asia/Shanghai
+  file:
+    name: log/hermes-agent-demo-dev.log
+  level:
+    root: INFO
+    com.example.chat: DEBUG
+    org.springframework.ai: DEBUG
+    org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor: DEBUG
+    # 开发期排查 HTTP 接口用，需要更详细可临时调到 DEBUG/TRACE
+    org.springframework.web: INFO
+  logback:
+    rollingpolicy:
+      file-name-pattern: ${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz
+      max-file-size: 10MB
+      max-history: 30
+      total-size-cap: 1GB
+      # 启动时清理超出 max-history 的旧归档
+      clean-history-on-start: true

@@ -1,0 +1,362 @@
+spring:
+  application:
+    name: hermes-agent-demo
+  profiles:
+    # 默认走生产配置；本地开发可通过以下任一方式切到 dev：
+    #   1. JVM 参数:  -Dspring.profiles.active=dev
+    #   2. 环境变量:  SPRING_PROFILES_ACTIVE=dev
+    #   3. IDE 启动配置里指定 active profile = dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  config:
+    import: optional:classpath:application.private.yaml
+  # pgvector 依赖的 Postgres 连接，对应 docker/pgsql/docker-compose.yml：
+  #   cd docker/pgsql && docker compose up -d
+  # 库名 rag-demo / 用户 postgres / 密码 123456；建表与扩展由 pgsql_init/*.sql 在首次启动时执行。
+  datasource:
+    # 开发期经 p6spy 观测 SQL：URL 前缀加 p6spy:，并显式指定 P6Spy 驱动（HikariCP 无法自动推断）。
+    # 关闭观测：把 url 改回 jdbc:postgresql://... 并删掉 driver-class-name 即可（依赖可保留）。
+    url: ${POSTGRES_URL:jdbc:p6spy:postgresql://localhost:5433/rag-demo}
+    driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:123456}
+  # 文档上传体积上限（解析入库接口用），按需调整。
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  # 静态资源位置：指向前端打包产物目录 classpath:/dist/（Vite 输出）。
+  # 覆盖默认的 classpath:/static、/public 等。SPA 回退与 CORS 见 WebConfig。
+  web:
+    resources:
+      static-locations: classpath:/dist/
+  ai:
+    # Both providers configured; per-request modelName routes to one of them.
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:sk-*******}
+      chat:
+        model: claude-sonnet-4-6
+      base-url: https://api.ohmygpt.com
+    openai:
+      api-key: ${OPENAI_API_KEY:sk-*******}
+      chat:
+        temperature: 1.0
+        model: gpt-5.5
+        base-url: https://apic1.ohmycdn.com/v1
+        reasoning-effort: high
+      # ===== RAG embedding =====
+      # 文档入库与检索都靠它把文本转成向量。独立配 base-url/api-key/模型，
+      # 与上面的 chat（openai.api-key）解耦，方便走不同供应商。
+      # 当前 dashscope text-embedding-ada-002 实际输出 1024 维，须与 pgsql_init 建表的 vector(1024) 一致。
+      embedding:
+        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        #base-url: https://cn2us02.opapi.win
+        api-key: ${OPENAI_EMBEDDING_API_KEY:sk-*******}
+        model: text-embedding-v4
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:sk-*******}
+      chat:
+        model: deepseek-v4-flash
+
+    # ===== pgvector 向量库 =====
+    # 表结构由 docker/pgsql/pgsql_init/01-extensions-pgvector.sql 在容器首启时建好
+    # （vector_store.embedding = vector(1024)，与 ada-002 实际输出一致），
+    # 所以这里 initialize-schema=false，由 DB 侧的初始化脚本独占管理 schema。
+    # 换 embedding 模型导致维度变化时，需同步改 SQL 的 vector(N) 并重建库（删 volumes 后重启）。
+    vectorstore:
+      pgvector:
+        initialize-schema: false
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+
+my-model:
+  enabled: true
+  # base-url 由 application-{profile}.yaml 覆盖（dev/prod 不同）
+  model: openai-compatible
+  temperature: 0.5
+  thinking: disabled
+  job-type: 1
+
+app:
+  # ===== 业务数据源（命名用"引擎+序号"，与具体库名解耦；均独立于上面的 pgvector 主库 @Primary）=====
+  # 数据源标识 pgsql01/mysql01 稳定不随库名变；接同类型库时序号递增即可。
+  datasource:
+    # pgsql01：一个 PostgreSQL 实例（当前指向 ai-sport 库）。可选数据源。
+    # 装配 com.example.chat.datasource.Pgsql01DataSourceConfig；
+    # Mapper = com.example.chat.mapper.pgsql01（接口）+ classpath:mapper/pgsql01/（XML）。
+    pgsql01:
+      # 置为 false 则整套不装配（没有这个库也能启动）；缺省视为启用。
+      enabled: false
+      username: ${PGSQL01_DB_USER:postgres}
+      password: ${PGSQL01_DB_PASSWORD:123456}
+      # 同样经 p6spy 观测 SQL（前缀 jdbc:p6spy: + P6Spy 驱动）；spy.properties 的 driverlist 已含 postgresql。
+      driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+      # PostgreSQL 连接参数：
+      #   stringtype=unspecified —— 忽略类型推断，避免写入时强制 :: 转换
+      #   binaryTransfer=false   —— 规避 BYTEA 十六进制传输问题
+      #   sslmode=disable        —— 关闭 SSL（开发环境）
+      #   TimeZone/ApplicationName —— 时区与连接标识
+      url: ${PGSQL01_DB_URL:jdbc:p6spy:postgresql://localhost:5432/ai-sport?stringtype=unspecified&binaryTransfer=false&sslmode=disable&TimeZone=Asia/Shanghai&ApplicationName=api-resource}
+    # mysql01：一个 MySQL 实例（库见 docker/mysql-db，库名恰好也叫 ai-sport，但与上面 pgsql01 是两套独立存储）。可选数据源。
+    # 装配 com.example.chat.datasource.Mysql01DataSourceConfig；
+    # Mapper = com.example.chat.mapper.mysql01（接口）+ classpath:mapper/mysql01/（XML）。
+    mysql01:
+      # 置为 false 则整套不装配（没有这个库也能启动）；缺省视为启用。
+      enabled: false
+      username: ${MYSQL01_DB_USER:ai_user}
+      password: ${MYSQL01_DB_PASSWORD:ai_password}
+      # 同样经 p6spy 观测 SQL；spy.properties 的 driverlist 已含 com.mysql.cj.jdbc.Driver。
+      driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+      # MySQL 连接参数：
+      #   useUnicode/characterEncoding —— UTF-8 编码
+      #   serverTimezone               —— 时区（与容器 default-time-zone=+8:00 对齐）
+      #   useSSL=false                 —— 关闭 SSL（开发环境）
+      #   allowPublicKeyRetrieval=true —— MySQL 8 caching_sha2_password 非 SSL 连接所需
+      url: ${MYSQL01_DB_URL:jdbc:p6spy:mysql://localhost:3306/ai-sport?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+
+  skills:
+    # 宿主机 skill 缓存根目录。固定挂在 /work/ 下，让宿主机路径与沙箱内路径在 work/ 段
+    # 之后完全对齐 —— SandboxFactory 会剥掉 host 路径里 work/ 之前的所有部分，把后面
+    # 的子路径直接作为沙箱内的相对路径，于是：
+    #   Linux host:   /work/skills-cache/<u>/<a>/<s>/<name>-<hash>/SKILL.md
+    #   sandbox 内:  /work/skills-cache/<u>/<a>/<s>/<name>-<hash>/SKILL.md   (一致)
+    #   Windows host: X:\work\skills-cache\<u>/<a>/...                       (盘符 + 反斜杠)
+    # Linux 零翻译；Windows 多一条 prompt 规则（剥盘符、\ → /）。
+    #
+    # 运维上线一次性准备（启动时若目录缺失会 fail-fast 给出具体命令）：
+    #   Linux:   sudo install -d -o $USER -g $USER -m 750 /work
+    #   Windows: mkdir <盘>:\work     (PowerShell 或管理员 cmd)
+    cache-dir: /work/skills-cache
+
+  # 子代理（Claude 风格 .md 文件）缓存目录。
+  # 每个子代理是一个 .md 文件（YAML frontmatter + system prompt 正文），由 AgentCacheService
+  # 从 ChatRequest.subagents 里的 url 下载到 <cache-dir>/<userId>/<assistantId>/<sessionId>/<name>-<urlHash>.md。
+  # 与 skills 的 zip 解压目录不同 —— 子代理是单文件资源，不做解压。
+  # 运维上线一次性准备（启动时若目录缺失会 fail-fast）：
+  #   Linux:   sudo install -d -o $USER -g $USER -m 750 /work
+  #   Windows: mkdir <盘>:\work     (PowerShell 或管理员 cmd)
+  agents:
+    cache-dir: /work/agents-cache
+
+  # Brave Web Search 工具（实现见 com.example.chat.tools.ProxiedBraveWebSearchTool，
+  # 与上游 spring-ai-agent-utils 的 BraveWebSearchTool 工具签名等价，
+  # 只是把 hardcoded base-url 抽成了配置项，便于配反代解决国内访问超时）。
+  # - api-key：为空时 bean 不注册，等同于"未启用 Web 搜索"。
+  # - base-url：默认官方端点，国内/受限网络改成你的反代地址（要求路径 /res/v1/web/search
+  #   兼容，并允许 X-Subscription-Token 头透传）。
+  # 客户端启用方式：ChatRequest.tools 里写 "WebSearch"。
+  brave-search:
+    api-key:
+    base-url: https://api.search.brave.com
+    result-count: 10
+
+  # SmartWebFetch 工具：抓取 URL → HTML 转 Markdown → 用固定 ChatClient（绑 DeepSeek）做摘要。
+  # 与 WebSearch 配套使用：先 WebSearch 拿候选 URL，再 WebFetch 抓正文 + 摘要。
+  # 摘要模型固定走 deepseek-v4-flash（便宜、64K 上下文够装大段网页），不跟随请求的 modelName。
+  # domain-safety-check 默认 false：上游会调 claude.ai 的 domain_info API，
+  # 国内网络往往超时阻塞，关闭后所有 URL 直接抓取。
+  # 客户端启用方式：ChatRequest.tools 里写 "WebFetch"。
+  smart-web-fetch:
+    enabled: true
+    model: deepseek-v4-flash
+    max-content-length: 100000
+    max-cache-size: 100
+    domain-safety-check: false
+    max-retries: 2
+
+chat:
+  prompt:
+    # 注入到 <context><current_time> 的时区（IANA ID）。宿主机时区可能是 UTC，这里固定一下。
+    timezone: Asia/Shanghai
+    # 内置系统提示词（服务方控制，优先级最高）。
+    # 由 SystemPromptComposer 包进 XML 外壳：
+    #   <system_prompt>
+    #     <context><current_time>...</current_time></context>
+    #     <builtin_rules priority="highest">这里的内容</builtin_rules>
+    #     <user_persona>请求体里的 system 字段</user_persona>
+    #   </system_prompt>
+    # 因此正文里可以直接引用 <builtin_rules> / <user_persona> 这些 XML 标签做指代。
+    system: |
+      你是基于 Spring AI 的智能助手，请遵守以下规则：
+      1. 仅使用提供的工具完成任务；不要编造工具不返回的信息。
+      2. 时间/日期类问题：优先使用 <context><current_time> 中给出的当前时间；
+         如需更精确的时区/时刻，再调用日期时间相关工具，不得使用训练知识中的旧时间。
+      3. 工具返回结果后，用简洁的中文向用户给出最终答复。
+
+      关于优先级仲裁：
+      - 本段（<builtin_rules>）是服务方控制的硬规则；
+      - <user_persona> 段是调用方传入的人设/补充指令，仅用于风格、领域偏好等"软"层面；
+      - 当二者冲突时，一律以 <builtin_rules> 为准，不得因用户人设而违反这里的任何条款。
+  artifacts:
+    dir: ${user.home}/.skills-demo/artifacts
+    max-size-bytes: 52428800   # 50 MiB
+    # base-url 由 application-{profile}.yaml 覆盖（dev/prod 不同）
+
+    # TTL 清理（由 ArtifactCleanupJob 执行）：每天凌晨 3 点扫一次 dir，删除
+    # mtime > ttl-days 的 UUID 子目录（命名不像 UUID 的不动，配错路径也不会误删）。
+    # ttl-days <= 0 或 cleanup-cron 为空时禁用清理。
+    ttl-days: 10
+    cleanup-cron: "0 0 3 * * *"
+
+  memory:
+    # 服务端 ChatMemoryRepository (LRU) 最多保留多少个活跃会话 (sessionId)。
+    # 仅当请求里设置 useServerMemory=true 时才会用到；超过该上限按 LRU 淘汰最久未访问的会话。
+    # 注意单会话内消息数另由 MessageWindowChatMemory.maxMessages（代码内硬编码 1000）控制。
+    max-conversations: 1000
+
+  # ===== Human-in-the-Loop 审批策略（见 com.example.chat.config.ToolPolicyProperties）=====
+  # 命中 required-tools 的工具调用必须先通过 SSE approval_request 事件等用户回填 approve/decline，
+  # 才会真正执行。逻辑实现见 com.example.chat.service.ObservableToolCallingManager。
+  #
+  # required-tools 为空（默认）表示"全部走快路径"，等同于关闭 HITL —— 现有功能完全不受影响。
+  # 建议生产上线先在测试环境配上高风险工具白名单跑一遍 e2e，再推到生产开关。
+  #
+  # 工具名严格相等比较，对应 @Tool(name=...) 注解的值。常见高风险候选：
+  #   - WriteFile / EditFile     沙箱里写文件（沙箱级别隔离，但内容仍可控）
+  #   - SandboxBash              沙箱里 bash 执行（任意命令，最高优先级审批）
+  # 只读类（WebSearch / WebFetch / TodoWrite / getDateTime ...）通常不需要审批，留空白名单即可。
+  #
+  # ⚠️ 多实例部署：ApprovalRegistry 是进程内的，必须在 LB 层为 /chat/stream 和 /chat/approval
+  #   配 sticky session（按 sessionId 或 userId 一致 hash），否则前端审批回填可能落到另一台进程，
+  #   命中 "unknown requestId" 后被自动判 DECLINE。本项目其它接口（sandbox 会话复用）
+  #   也已经有同样的 sticky 要求，与现有运维约定一致。
+  hitl:
+    # 单条审批的超时时长。到期前端未回填即按 DECLINE 兜底（fail-safe）。
+    # 与 spring-ai-playground 默认对齐：2 分钟既给用户充分决策时间，又能在被遗忘时及时释放工具循环。
+    timeout: 3m
+    # /chat/stream 流级 SSE 保活心跳节奏（周期性；HITL gate 另在 approval_request 后立即补一条）。
+    # 必须有：HITL 人审 / 模型慢响应期间 SSE 流上可能无 data，nginx (proxy_buffering on 默认) /
+    # Cloudflare / 云 LB 会把刚发的帧 hold 在缓冲里 → 前端永远收不到 → 渲染不出按钮 → 死锁。
+    # 心跳 ({"type":"heartbeat"} 极小事件) 把缓冲撑满触发 flush，前端按 type 派发时直接忽略即可。
+    # 默认 15s，兼容 nginx 60s / Cloudflare 100s / ALB 60s 默认 idle，4 倍冗余；
+    # 配 0 或负值整段关闭（仅在明确不走代理时使用）。
+    heartbeat-interval: 15s
+    # 待审批工具白名单。默认空 = 关闭 HITL，所有工具直通。
+    # 上线开启示例（去掉前面 # 即可）：
+    # required-tools:
+    #   - SandboxBash
+    #   - WriteFile
+    #   - EditFile
+    # required-tools: []
+    required-tools:
+      - Write
+      - Edit
+      - Bash
+
+  # ===== RAG 知识库（见 com.example.chat.rag.RagProperties）=====
+  rag:
+    # 问答使用的对话模型，经 ModelRouter 路由到对应 provider。
+    chat-model: deepseek-v4-flash
+    # 向量检索相似度阈值与召回条数。
+    similarity-threshold: 0.5
+    top-k: 4
+    # 切分策略：
+    #   token     - Spring AI 官方 TokenTextSplitter（token 窗口，无 overlap，最基础）
+    #   recursive - 自研递归切分（递归分隔符 + token 计长 + overlap，中文友好，零额外成本）【默认】
+    #   semantic  - 语义切分（按句向量相似度找断点，召回更聚焦，但入库要对句子额外 embedding，更慢更贵）
+    splitter: recursive
+    # 文本切块目标 token 数 + 相邻块重叠 token 数。
+    # chunk-overlap 建议为 chunk-tokens 的 10~20%，跨块保留上下文以改善边界召回；必须小于 chunk-tokens。
+    chunk-tokens: 800
+    chunk-overlap: 120
+    # 语义切分断点分位数（0~100，仅 splitter=semantic 生效）：取相邻句子距离的该分位为阈值，越大块越大。
+    semantic-breakpoint-percentile: 95
+    # 重排（rerank）：向量召回是粗筛，rerank 用交叉编码模型对候选块做精排，明显改善上下文质量。
+    # 开启后检索/问答会先粗召回 candidate-top-k 条，再 rerank 截到请求的 topK。默认关闭。
+    rerank:
+      enabled: true
+      # OpenAI 兼容的 rerank 端点，默认对接阿里云百炼 DashScope。
+      base-url: https://dashscope.aliyuncs.com/compatible-api
+      # 建议用环境变量注入，勿写死在仓库。
+      api-key: ${DASHSCOPE_API_KEY:sk-*******}
+      model: qwen3-rerank
+      instruct: "Given a web search query, retrieve relevant passages that answer the query."
+      # 粗召回候选数（送进 rerank 的条数），一般取最终 topK 的 3~5 倍。
+      candidate-top-k: 20
+      # API 限额（默认按 qwen3-rerank）：超限时丢弃靠后候选 / 单条超长按 token 截断，不会直接报错。
+      max-documents: 500
+      max-tokens-per-doc: 8000
+      max-tokens-per-request: 120000
+    # 混合检索：向量（语义近似）+ 关键词全文（字面精确命中），用加权 RRF 融合排序。默认关闭。
+    # 开启需库里建好 content 全文索引（见 docker/pgsql/pgsql_init/01-extensions-pgvector.sql）。
+    hybrid:
+      enabled: false
+      # PostgreSQL 全文检索配置；必须与全文索引使用的配置一致。中文更好分词可换 zhparser/pg_jieba。
+      ts-config: simple
+      # 加权 RRF：k 越大排名靠后文档影响越平缓（业界常用 60）；两路权重控制向量/关键词谁更主导。
+      rrf-k: 60
+      vector-weight: 1.0
+      keyword-weight: 1.0
+      # 每一路召回并送入融合的候选数。
+      candidate-top-k: 20
+    # embedding 批处理限额（默认按 DashScope text-embedding-v4）：入库 vectorStore.add 会用
+    # BoundedBatchingStrategy 按这两个维度分批，避免超限报错；语义切分的句子 embedding 也复用同一限额。
+    embedding:
+      # 单次 embedding 请求的最大文本条数。
+      batch-size: 10
+      # 单条文本最大 token 数（每条上限，非整批总和）；超过即 fail-fast，提示调小 chunk-tokens。
+      max-input-tokens: 8192
+
+  sandbox:
+    mode: docker
+    # 自构镜像（基于 ghcr.io/spring-ai-community/agents-runtime + matplotlib/numpy/pandas + CJK 字体）。
+    # 构建脚本与升级流程见 docker/sandbox-runtime/README.md。
+    # 生产部署不要回退到 :latest，固定 tag 才能干净回滚。
+    image: ghcr.io/spring-ai-community/agents-runtime@sha256:0f136fc9abc20f448f6b0739e53e6a88b1b4e2ecf0ae15d82ef37bbd82f87a61
+    #image: mmdjzm/sandbox-runtime:1.0.0
+    # 单次 Bash 调用的超时（毫秒），双语义：
+    #   1) LLM 不传 timeout 时作为默认值；
+    #   2) LLM 传 timeout 时作为硬上限，超过会被静默夹紧。
+    # 防止 prompt-injection 让模型把 timeout 拉到很长，进而导致沙箱内进程长时间占资源。
+    # 当前 = 100 秒。调整时同步评估业务侧最长合法脚本耗时。
+    exec-timeout-ms: 180000
+
+    # ===== per-session 沙箱复用（灰度功能，默认关闭）=====
+    # 开启后按 (userId, assistantId, sessionId) 复用 Docker 容器：
+    # 同一对话内的多轮请求不再每次重建容器、重新 pip install，体验接近 ChatGPT Code Interpreter。
+    # 关闭则维持 per-request 老行为（每请求独立沙箱、请求结束即销毁），是出问题时的回退路径。
+    # 集群部署前置：必须在 LB 层配 sticky session（如 Nginx hash $sticky_key consistent），
+    # 否则同 session 落到不同 Pod 会各建一个容器，复用效果失效。
+    session-enabled: true
+    # 沙箱闲置多久后被后台清理（refCount=0 且 now - lastAccess > 此值）。
+    session-ttl: 5m
+    # 后台清理轮询周期（毫秒）。@Scheduled 解析的是固定字符串 ${chat.sandbox.session-cleanup-interval-ms}，
+    # 改值后需重启生效；改名时同步更新 SandboxSessionManager 上的 fixedDelayString。
+    session-cleanup-interval-ms: 60000
+    # 沙箱绝对最大寿命：超过即由后台清理强 close，不管 refCount。
+    # 兜底场景：refCount 因 bug/异常断连泄漏（idle/ttl 路径失效）、长寿命沙箱状态老化。
+    # 触发时正在执行的命令会失败一次，由用户重试自动建新沙箱解决。
+    session-max-lifetime: 30m
+    # 全局活跃沙箱条数上限。达到后先按 LRU 淘汰一个 refCount=0 的最老条目；仍超限则拒绝新请求。
+    max-sessions: 3
+
+  # 外部工具平台。每个 platform 对应一种 wire format / 鉴权 / endpoint 约定，
+  # 实现见 com.example.chat.tools.external.*ToolPlatform。
+  # 请求体 externalTools[].platform 选择平台；未填回退到 "dify"。
+  # endpoint 不允许由请求传入（防 SSRF），只能在这里配置。
+  external-tools:
+    platforms:
+      dify:
+        # 留空时进入 stub 模式：不发请求，直接 echo 回去，便于本地联调。
+        endpoint: ${DIFY_TOOL_ENDPOINT:}
+        timeout-ms: 30000
+        # headers 缺省即空 Map（ExternalToolsProperties.PlatformProps.headers 默认 new LinkedHashMap）。
+        # 注：Boot 4.1 的 Binder 会把 `headers: {}` 空 Map 当空串处理导致启动失败，故缺省不写该 key。
+      # 示例：后续要加新平台只需新增一个块 + 实现一个 ExternalToolPlatform bean。
+      # n8n:
+      #   endpoint: https://n8n.example.com/webhook/xxx
+      #   timeout-ms: 15000
+      #   headers:
+      #     Authorization: Bearer ${N8N_TOKEN}
+
+
+server:
+  port: 8080
+
+
+# 日志配置按环境分开：见 application-dev.yaml / application-prod.yaml。
+# 这里只保留最小兜底，避免没加载到任何 profile 时日志完全不可见。
+logging:
+  pattern:
+    dateformat: yyyy-MM-dd HH:mm:ss.SSS,Asia/Shanghai
+  level:
+    root: INFO
