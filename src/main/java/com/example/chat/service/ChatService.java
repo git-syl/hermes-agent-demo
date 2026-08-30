@@ -1011,10 +1011,9 @@ public class ChatService {
                     b.temperature(temperature);
                 }
                 if (thinkOn) {
-                    // 思考强度高档；DeepSeek 在 2025-07 后 open-source/claude-code 等场景会自动提到 MAX，这里给 HIGH 即可。
-                    //b.thinking(Thinking.ENABLED).reasoningEffort(ReasoningEffort.HIGH);
+                    b.thinking(Thinking.ENABLED).reasoningEffort(ReasoningEffort.HIGH);
                 } else if (thinkOff) {
-                   // b.thinking(Thinking.DISABLED);
+                    b.thinking(Thinking.DISABLED);
                 }
                 yield b;
             }
